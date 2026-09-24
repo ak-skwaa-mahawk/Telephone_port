@@ -1,6 +1,5 @@
 import ctypes
 import hashlib
-import json
 from jump_chain import estate, TitleStatus, AuthorityLevel
 
 # C-compatible struct definitions (GCC System V ABI packed layout)
@@ -54,13 +53,23 @@ def serialize_estate_to_frame() -> SovereignAuditFrame:
     return frame
 
 def compute_frame_binary_hash(frame: SovereignAuditFrame) -> str:
-    """Computes SHA-256 over identical bytes processed by the seL4 microkernel server."""
+    """Computes SHA-256 over exact memory buffers matching seL4 main.c."""
     h = hashlib.sha256()
-    h.update(bytes(frame.claimant))
-    h.update(bytes(frame.dockets))
-    # Hash active nodes
-    for i in range(frame.node_count):
-        h.update(bytes(frame.nodes[i]))
+    base_addr = ctypes.addressof(frame)
+
+    # 1. Raw 64-byte claimant buffer (sizeof(frame.claimant))
+    claimant_ptr = base_addr + SovereignAuditFrame.claimant.offset
+    h.update(ctypes.string_at(claimant_ptr, 64))
+
+    # 2. Raw 144-byte dockets buffer (sizeof(frame.dockets))
+    dockets_ptr = base_addr + SovereignAuditFrame.dockets.offset
+    h.update(ctypes.string_at(dockets_ptr, 3 * 48))
+
+    # 3. Active nodes buffer (sizeof(CLineageNode) * node_count = 68 * node_count)
+    nodes_ptr = base_addr + SovereignAuditFrame.nodes.offset
+    node_bytes_len = ctypes.sizeof(CLineageNode) * frame.node_count
+    h.update(ctypes.string_at(nodes_ptr, node_bytes_len))
+
     return h.hexdigest()
 
 if __name__ == "__main__":
