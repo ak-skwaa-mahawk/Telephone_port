@@ -2,7 +2,13 @@ import socket
 import json
 import sys
 import argparse
-from jump_chain import estate
+import io
+import contextlib
+
+# Suppress noisy banner prints from jump_chain import
+with contextlib.redirect_stdout(io.StringIO()):
+    from jump_chain import estate
+    from audit_contract import serialize_estate_to_frame, compute_frame_binary_hash, SovereignAuditFrame
 
 DEFAULT_PORT = 9999
 DEFAULT_HOST = "127.0.0.1"
@@ -12,53 +18,87 @@ def run_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
     server.listen(5)
-    print(f"[teleport-server] Listening on {host}:{port}...")
+    print(f"[teleport-server] Listening on {host}:{port} (Dual JSON + 808-byte Binary mode)...")
 
     try:
         while True:
             conn, addr = server.accept()
-            print(f"[teleport-server] Connection accepted from {addr}")
+            data = conn.recv(64).decode("utf-8", errors="ignore").strip()
             
-            # Generate deterministic payload
-            result = estate.evaluate_jurisdictional_conflict(
-                corporate_entity="Doyon / Regional Corporate Ledger"
-            )
-            payload = json.dumps(result, indent=4).encode("utf-8")
+            if "GET_BIN_FRAME" in data:
+                frame = serialize_estate_to_frame()
+                payload = bytes(frame)
+                conn.sendall(payload)
+                digest = compute_frame_binary_hash(frame)
+                print(f"[teleport-server] Sent 808-byte SovereignAuditFrame to {addr} (SHA-256: {digest[:16]}...)")
+            else:
+                result = estate.evaluate_jurisdictional_conflict(
+                    corporate_entity="Doyon / Regional Corporate Ledger"
+                )
+                payload = json.dumps(result, indent=4).encode("utf-8")
+                conn.sendall(payload)
+                print(f"[teleport-server] Sent JSON evaluation payload to {addr}")
             
-            conn.sendall(payload)
             conn.close()
     except KeyboardInterrupt:
-        print("\n[teleport-server] Server stopped.")
+        print("\n[teleport-server] Shutting down.")
     finally:
         server.close()
 
-def query_client(host=DEFAULT_HOST, port=DEFAULT_PORT):
+def query_client(host=DEFAULT_HOST, port=DEFAULT_PORT, binary_mode=False):
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         client.connect((host, port))
-        raw_data = b""
-        while True:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            raw_data += chunk
         
-        parsed = json.loads(raw_data.decode("utf-8"))
-        print("[teleport-client] Received evaluated payload:")
-        print(json.dumps(parsed, indent=4))
+        if binary_mode:
+            client.sendall(b"GET_BIN_FRAME\n")
+            raw_data = bytearray()
+            while len(raw_data) < 808:
+                chunk = client.recv(808 - len(raw_data))
+                if not chunk:
+                    break
+                raw_data.extend(chunk)
+            
+            if len(raw_data) == 808:
+                frame = SovereignAuditFrame.from_buffer_copy(raw_data)
+                digest = compute_frame_binary_hash(frame)
+                print(f"[teleport-client] Successfully received 808-byte frame from {host}:{port}")
+                print(f"      -> Magic: 0x{frame.magic:08X} ({'VALID' if frame.magic == 0x534F5652 else 'INVALID'})")
+                print(f"      -> Role Badge: 0x{frame.fiduciary_role:04X}")
+                print(f"      -> Claimant: {frame.claimant.decode('utf-8', errors='replace')}")
+                print(f"      -> Active Lineage Nodes: {frame.node_count}")
+                print(f"      -> Cryptographic Digest: {digest}")
+                assert digest == "de154802cd1da19a38624c54ab004bfb95658243feb72d41b270563e8cb5daea"
+                print(f"[teleport-client] *** BINARY DIGEST MATCHES KERNEL SEED! ***")
+            else:
+                print(f"[teleport-client] Incomplete payload: got {len(raw_data)}/808 bytes")
+        else:
+            client.sendall(b"GET_JSON\n")
+            chunks = []
+            while True:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            raw_data = b"".join(chunks)
+            parsed = json.loads(raw_data.decode("utf-8"))
+            print("[teleport-client] Received evaluated JSON payload:")
+            print(json.dumps(parsed, indent=4))
+            
     except ConnectionRefusedError:
-        print(f"[teleport-client] Connection failed. Is the server running on {host}:{port}?")
+        print(f"[teleport-client] Connection failed on {host}:{port}")
     finally:
         client.close()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Teleport socket JSON holder")
+    parser = argparse.ArgumentParser(description="Teleport socket JSON/Binary transport")
     parser.add_argument("mode", choices=["server", "client"], help="Run as server or client")
-    parser.add_argument("--host", default=DEFAULT_HOST, help=f"Host address (default: {DEFAULT_HOST})")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port number (default: {DEFAULT_PORT})")
-    
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--bin", action="store_true", help="Request raw binary audit contract frame")
+
     args = parser.parse_args()
     if args.mode == "server":
         run_server(args.host, args.port)
     else:
-        query_client(args.host, args.port)
+        query_client(args.host, args.port, binary_mode=args.bin)
