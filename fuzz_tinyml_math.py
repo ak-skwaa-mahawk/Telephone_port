@@ -133,7 +133,8 @@ def run_feature_vector_fuzz(sample_count: int = 1000):
     print(f"[*] Testing {sample_count} pathological multi-node feature vectors...")
     
     sys.path.insert(0, os.path.expanduser("~/Telephone_port"))
-    from audit_contract import SovereignAuditFrame, SOVR_MAGIC
+    from audit_contract import SovereignAuditFrame, SOVA_MAGIC
+    SOVR_MAGIC = 0x534F5652
 
     SOVR_FLAG_ANOMALY = 0x0008
     SOVR_FLAG_CORP_DEFENSE = 0x0006
