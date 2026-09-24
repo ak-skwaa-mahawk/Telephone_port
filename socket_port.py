@@ -5,13 +5,13 @@ import argparse
 import io
 import contextlib
 
-# Suppress noisy banner prints from jump_chain import
 with contextlib.redirect_stdout(io.StringIO()):
     from jump_chain import estate
     from audit_contract import serialize_estate_to_frame, compute_frame_binary_hash, SovereignAuditFrame
 
 DEFAULT_PORT = 9999
 DEFAULT_HOST = "127.0.0.1"
+COM2_PORT = 9998
 
 def run_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -90,15 +90,55 @@ def query_client(host=DEFAULT_HOST, port=DEFAULT_PORT, binary_mode=False):
     finally:
         client.close()
 
+def stream_to_sel4_com2(host=DEFAULT_HOST, port=COM2_PORT):
+    """Pipes 808-byte SovereignAuditFrame directly into seL4 guest via QEMU COM2 TCP socket."""
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        print(f"[teleport-stream] Connecting to seL4 COM2 serial bridge on {host}:{port}...")
+        client.connect((host, port))
+        
+        frame = serialize_estate_to_frame()
+        payload = bytes(frame)
+        expected_digest = compute_frame_binary_hash(frame)
+        
+        print(f"[teleport-stream] Streaming {len(payload)} bytes into COM2...")
+        client.sendall(payload)
+        
+        print(f"[teleport-stream] Awaiting 32-byte SHA-256 acknowledgment from microkernel...")
+        ack_digest = bytearray()
+        while len(ack_digest) < 32:
+            chunk = client.recv(32 - len(ack_digest))
+            if not chunk:
+                break
+            ack_digest.extend(chunk)
+            
+        ack_hex = ack_digest.hex()
+        print(f"[teleport-stream] Received Kernel Acknowledgment Digest:\n      {ack_hex}")
+        
+        if ack_hex == expected_digest:
+            print(f"[teleport-stream] *** 1:1 CRYPTOGRAPHIC PARITY CONFIRMED OVER LIVE SERIAL! ***")
+        else:
+            print(f"[teleport-stream] Warning: Digest mismatch! Expected: {expected_digest}")
+            
+    except ConnectionRefusedError:
+        print(f"[teleport-stream] Connection failed. Is QEMU running with COM2 on {host}:{port}?")
+    finally:
+        client.close()
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Teleport socket JSON/Binary transport")
-    parser.add_argument("mode", choices=["server", "client"], help="Run as server or client")
+    parser = argparse.ArgumentParser(description="Teleport socket JSON/Binary/COM2 transport")
+    parser.add_argument("mode", choices=["server", "client", "stream-com2"], help="Operation mode")
     parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--bin", action="store_true", help="Request raw binary audit contract frame")
 
     args = parser.parse_args()
     if args.mode == "server":
-        run_server(args.host, args.port)
-    else:
-        query_client(args.host, args.port, binary_mode=args.bin)
+        port = args.port or DEFAULT_PORT
+        run_server(args.host, port)
+    elif args.mode == "client":
+        port = args.port or DEFAULT_PORT
+        query_client(args.host, port, binary_mode=args.bin)
+    elif args.mode == "stream-com2":
+        port = args.port or COM2_PORT
+        stream_to_sel4_com2(args.host, port)
