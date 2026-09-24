@@ -84,3 +84,28 @@ if __name__ == "__main__":
     with open("audit_frame.bin", "wb") as f:
         f.write(raw_bytes)
     print(f"[+] Saved audit_frame.bin")
+
+# ============================================================================
+# Structured Response Frame (40 bytes) Matching seL4 sovereign_contract.h
+# ============================================================================
+SOVA_MAGIC = 0x534F5641
+
+SOVR_STATUS_SUCCESS    = 0x0000
+SOVR_STATUS_ERR_UNAUTH = 0xE001
+SOVR_STATUS_ERR_MAGIC  = 0xE002
+SOVR_STATUS_ERR_BOUNDS = 0xE003
+
+SOVR_FLAG_STATUTORY_DUTY      = (1 << 0)
+SOVR_FLAG_CORP_DEFENSE_VALID  = (1 << 1)
+SOVR_FLAG_CAN_BE_ADMINISTERED = (1 << 2)
+
+class SovereignResponseFrame(ctypes.LittleEndianStructure):
+    _pack_ = 1
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("status_code", ctypes.c_uint16),
+        ("flags", ctypes.c_uint16),
+        ("root_hash", ctypes.c_uint8 * 32),
+    ]
+
+assert ctypes.sizeof(SovereignResponseFrame) == 40, f"Expected 40 bytes, got {ctypes.sizeof(SovereignResponseFrame)}"
