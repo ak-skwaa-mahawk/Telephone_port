@@ -12,6 +12,7 @@ from audit_contract import (
 )
 
 SOVR_MAGIC = 0x534F5652
+TITLE_ABORIGINAL_SOVEREIGN   = 0x0001
 SOVR_FLAG_STATUTORY_DUTY     = (1 << 0)  # 0x0001
 SOVR_FLAG_CORP_DEFENSE_VALID = (1 << 1)  # 0x0002
 SOVR_FLAG_CAN_BE_ADMINISTERED= (1 << 2)  # 0x0004
@@ -36,23 +37,24 @@ def build_test_frame(anomaly=False):
     frame.fiduciary_role = 0xC001
     frame.veteran_verified = 1
     frame.node_count = 2
-    frame.claimant = b"Test Multi-Node Batch Frame"
-    frame.statutory_duty = 1
-    frame.corporate_defense_valid = 0
-    frame.can_be_administered_away = 0
+    frame.claimant = b"Test Multi-Node Sovereign Batch"
+    
+    # Satisfy judicial order invariant using ctypes .value assignment
+    frame.dockets[0].value = b"4FA-23-01878PR-IN-THE-SUPERIOR-COURT-OF-ALASKA"
+    frame.dockets[1].value = b"3AN-24-00123CI"
 
     for i in range(2):
         node = frame.nodes[i]
+        node.title_type = TITLE_ABORIGINAL_SOVEREIGN
         if anomaly:
-            node.name = bytes([0x80] * 32)
-            node.era_year = 1900
-            node.territorial_hub = bytes([0x80] * 30)
-            node.title_type = 1
+            anom_payload = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+            node.name = anom_payload[:32]
+            node.era_year = int.from_bytes(anom_payload[32:34], "little")
+            node.territorial_hub = anom_payload[34:64]
         else:
             node.name = f"Node-{i}".encode("utf-8")
             node.era_year = 1900 + i
             node.territorial_hub = b"Fairbanks/Tanana"
-            node.title_type = 1
 
     return bytes(frame)
 
@@ -73,21 +75,21 @@ def main():
     s.connect((COM2_HOST, COM2_PORT))
 
     try:
-        # Test 1: Normal Batch Frame
+        # Test 1: Normal Multi-Node Batch Frame
         frame_normal = build_test_frame(anomaly=False)
         r1 = test_roundtrip(s, frame_normal)
         print(f"[+] Normal Batch Frame verified -> Status: {hex(r1.status_code)}, Flags: {hex(r1.flags)}")
-        assert (r1.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, "Statutory duty flag missing"
-        assert (r1.flags & SOVR_FLAG_ANOMALY_DETECTED) == 0, "Unexpected anomaly flag on normal frame"
+        assert (r1.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, f"Statutory duty missing, got {hex(r1.flags)}"
+        assert (r1.flags & SOVR_FLAG_ANOMALY_DETECTED) == 0, f"Anomaly flagged prematurely on normal frame: {hex(r1.flags)}"
 
         time.sleep(0.1)
 
-        # Test 2: Anomalous Batch Frame
+        # Test 2: Anomalous Multi-Node Batch Frame
         frame_anom = build_test_frame(anomaly=True)
         r2 = test_roundtrip(s, frame_anom)
         print(f"[+] Anomalous Batch Frame verified -> Status: {hex(r2.status_code)}, Flags: {hex(r2.flags)}")
-        assert (r2.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, "Statutory duty flag missing"
-        assert (r2.flags & SOVR_FLAG_ANOMALY_DETECTED) != 0, "Expected anomaly flag was not set"
+        assert (r2.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, f"Statutory duty missing on anomaly frame: {hex(r2.flags)}"
+        assert (r2.flags & SOVR_FLAG_ANOMALY_DETECTED) != 0, f"Anomaly flag missing on anomalous frame: {hex(r2.flags)}"
 
         print("[+] Dynamic anomaly and multi-node batch evaluation verified cleanly.")
     finally:
