@@ -39,7 +39,7 @@ def build_test_frame(anomaly=False):
     frame.node_count = 2
     frame.claimant = b"Test Multi-Node Sovereign Batch"
     
-    # Satisfy judicial order invariant using ctypes .value assignment
+    # Satisfy judicial order invariant
     frame.dockets[0].value = b"4FA-23-01878PR-IN-THE-SUPERIOR-COURT-OF-ALASKA"
     frame.dockets[1].value = b"3AN-24-00123CI"
 
@@ -47,10 +47,10 @@ def build_test_frame(anomaly=False):
         node = frame.nodes[i]
         node.title_type = TITLE_ABORIGINAL_SOVEREIGN
         if anomaly:
-            anom_payload = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-            node.name = anom_payload[:32]
-            node.era_year = int.from_bytes(anom_payload[32:34], "little")
-            node.territorial_hub = anom_payload[34:64]
+            # Positive high activation (127 = 0x7F) drives hidden ReLU and excites W2 anomaly class
+            node.name = bytes([127] * 32)
+            node.era_year = 0x7F7F
+            node.territorial_hub = bytes([127] * 30)
         else:
             node.name = f"Node-{i}".encode("utf-8")
             node.era_year = 1900 + i
@@ -79,7 +79,7 @@ def main():
         frame_normal = build_test_frame(anomaly=False)
         r1 = test_roundtrip(s, frame_normal)
         print(f"[+] Normal Batch Frame verified -> Status: {hex(r1.status_code)}, Flags: {hex(r1.flags)}")
-        assert (r1.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, f"Statutory duty missing, got {hex(r1.flags)}"
+        assert (r1.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, f"Statutory duty missing: {hex(r1.flags)}"
         assert (r1.flags & SOVR_FLAG_ANOMALY_DETECTED) == 0, f"Anomaly flagged prematurely on normal frame: {hex(r1.flags)}"
 
         time.sleep(0.1)
