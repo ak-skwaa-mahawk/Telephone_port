@@ -1,3 +1,4 @@
+SOVR_MAGIC = 0x534F5652
 #!/usr/bin/env python3
 import socket
 import time
@@ -7,8 +8,7 @@ import sys
 from audit_contract import (
     SovereignAuditFrame,
     SovereignResponseFrame,
-    SOVR_MAGIC,
-    SOVA_MAGIC,
+        SOVA_MAGIC,
     SOVR_FLAG_STATUTORY_DUTY,
     SOVR_STATUS_SUCCESS
 )
