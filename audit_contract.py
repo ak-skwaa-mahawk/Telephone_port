@@ -18,6 +18,7 @@ class SovereignAuditFrame(ctypes.Structure):
         ("magic", ctypes.c_uint32),                     # 0x534F5652 ("SOVR")
         ("version", ctypes.c_uint16),                   # 0x0001
         ("fiduciary_role", ctypes.c_uint16),            # 0xC001
+        ("sequence_id", ctypes.c_uint64),               # Sequence 27 Monotonic Anti-Replay Counter
         ("veteran_verified", ctypes.c_uint8),
         ("node_count", ctypes.c_uint8),
         ("reserved", ctypes.c_uint8 * 6),
