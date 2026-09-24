@@ -78,9 +78,11 @@ async def run_pipeline_test():
             
             # Start mesh_bridge_daemon with uplink env vars set
             env = os.environ.copy()
+            env["MESH_WS_PORT"] = "8767"
+            env["MESH_UDP_PORT"] = str(UDP_PORT)
             env["MESH_UPLINK_WSS_URL"] = f"wss://127.0.0.1:{RELAY_PORT}"
             env["MESH_UPLINK_TOKEN"] = EXPECTED_TOKEN
-            env["MESH_UPLINK_VERIFY_TLS"] = "0"  # accept self-signed test cert
+            env["MESH_UPLINK_VERIFY_TLS"] = "0"
 
             daemon_proc = subprocess.Popen(
                 [sys.executable, "/data/data/com.termux/files/home/Tordial-GS/scripts/mesh_bridge_daemon.py"],
@@ -92,7 +94,16 @@ async def run_pipeline_test():
             try:
                 # Wait for bridge to connect and authenticate
                 logger.info("[*] Waiting for bridge daemon to establish authenticated uplink...")
-                await asyncio.wait_for(auth_verified.wait(), timeout=5.0)
+                try:
+                    await asyncio.wait_for(auth_verified.wait(), timeout=6.0)
+                except TimeoutError:
+                    daemon_proc.poll()
+                    out, err = daemon_proc.communicate(timeout=1.0)
+                    print("--- DAEMON STDOUT ---")
+                    print(out.decode("utf-8", errors="ignore"))
+                    print("--- DAEMON STDERR ---")
+                    print(err.decode("utf-8", errors="ignore"))
+                    raise
                 logger.info("[+] Daemon uplink verified and connected.")
 
                 # Send Normal evaluation packet over UDP
