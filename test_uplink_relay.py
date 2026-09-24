@@ -56,13 +56,16 @@ async def wss_relay_handler(websocket):
     logger.info("[+] Uplink bearer token authenticated successfully.")
     auth_verified.set()
 
-    async for msg in websocket:
-        try:
-            data = json.loads(msg)
-            received_payloads.append(data)
-            logger.info(f"[+] Uplink received: {data.get('type')} (flags: {data.get('flags', {}).get('raw')})")
-        except Exception as e:
-            logger.error(f"[-] Decode error: {e}")
+    try:
+        async for msg in websocket:
+            try:
+                data = json.loads(msg)
+                received_payloads.append(data)
+                logger.info(f"[+] Uplink received: {data.get('type')} (flags: {data.get('flags', {}).get('raw')})")
+            except Exception as e:
+                logger.error(f"[-] Decode error: {e}")
+    except websockets.exceptions.ConnectionClosed:
+        pass
 
 async def run_pipeline_test():
     with tempfile.TemporaryDirectory() as tmpdir:
