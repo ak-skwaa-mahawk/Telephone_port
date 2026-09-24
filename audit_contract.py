@@ -41,12 +41,10 @@ def serialize_estate_to_frame() -> SovereignAuditFrame:
     frame.node_count = len(estate.lineage_graph)
     frame.claimant = estate.claimant.encode("utf-8")
 
-    # Assign dockets to nested char arrays
     for idx, docket in enumerate(estate.court_probate_dockets[:3]):
         raw_docket = docket.encode("utf-8")[:47]
         frame.dockets[idx].value = raw_docket
 
-    # Assign lineage nodes
     for idx, node in enumerate(estate.lineage_graph[:8]):
         frame.nodes[idx].name = node.name.encode("utf-8")[:31]
         frame.nodes[idx].era_year = node.era_year
@@ -55,14 +53,24 @@ def serialize_estate_to_frame() -> SovereignAuditFrame:
 
     return frame
 
+def compute_frame_binary_hash(frame: SovereignAuditFrame) -> str:
+    """Computes SHA-256 over identical bytes processed by the seL4 microkernel server."""
+    h = hashlib.sha256()
+    h.update(bytes(frame.claimant))
+    h.update(bytes(frame.dockets))
+    # Hash active nodes
+    for i in range(frame.node_count):
+        h.update(bytes(frame.nodes[i]))
+    return h.hexdigest()
+
 if __name__ == "__main__":
     frame = serialize_estate_to_frame()
     raw_bytes = bytes(frame)
-    print(f"[+] SovereignAuditFrame packed successfully.")
-    print(f"[+] Total struct size: {len(raw_bytes)} bytes (seL4 frame capacity: 4096 bytes)")
-    print(f"[+] Magic: 0x{frame.magic:08X}")
-    print(f"[+] Claimant: {frame.claimant.decode('utf-8', errors='replace')}")
-    print(f"[+] Active Lineage Nodes: {frame.node_count}")
+    binary_hash = compute_frame_binary_hash(frame)
+
+    print(f"[+] SovereignAuditFrame packed successfully ({len(raw_bytes)} bytes).")
+    print(f"[+] Python Binary SHA-256 Digest:")
+    print(f"    {binary_hash}")
 
     with open("audit_frame.bin", "wb") as f:
         f.write(raw_bytes)
