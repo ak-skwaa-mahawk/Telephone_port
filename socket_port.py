@@ -4,10 +4,11 @@ import sys
 import argparse
 import io
 import contextlib
+import copy
 
 with contextlib.redirect_stdout(io.StringIO()):
-    from jump_chain import estate
-    from audit_contract import serialize_estate_to_frame, compute_frame_binary_hash, SovereignAuditFrame
+    from jump_chain import estate, TitleStatus
+    from audit_contract import serialize_estate_to_frame, compute_frame_binary_hash, SovereignAuditFrame, CLineageNode
 
 DEFAULT_PORT = 9999
 DEFAULT_HOST = "127.0.0.1"
@@ -90,21 +91,16 @@ def query_client(host=DEFAULT_HOST, port=DEFAULT_PORT, binary_mode=False):
     finally:
         client.close()
 
-def stream_to_sel4_com2(host=DEFAULT_HOST, port=COM2_PORT):
-    """Pipes 808-byte SovereignAuditFrame directly into seL4 guest via QEMU COM2 TCP socket."""
+def stream_frame_to_com2(frame: SovereignAuditFrame, host=DEFAULT_HOST, port=COM2_PORT, label="Standard Frame"):
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        print(f"[teleport-stream] Connecting to seL4 COM2 serial bridge on {host}:{port}...")
         client.connect((host, port))
-        
-        frame = serialize_estate_to_frame()
         payload = bytes(frame)
         expected_digest = compute_frame_binary_hash(frame)
         
-        print(f"[teleport-stream] Streaming {len(payload)} bytes into COM2...")
+        print(f"[*] [{label}] Streaming {len(payload)} bytes into COM2...")
         client.sendall(payload)
         
-        print(f"[teleport-stream] Awaiting 32-byte SHA-256 acknowledgment from microkernel...")
         ack_digest = bytearray()
         while len(ack_digest) < 32:
             chunk = client.recv(32 - len(ack_digest))
@@ -113,21 +109,55 @@ def stream_to_sel4_com2(host=DEFAULT_HOST, port=COM2_PORT):
             ack_digest.extend(chunk)
             
         ack_hex = ack_digest.hex()
-        print(f"[teleport-stream] Received Kernel Acknowledgment Digest:\n      {ack_hex}")
+        print(f"    -> Expected SHA-256 : {expected_digest}")
+        print(f"    -> Kernel Returned  : {ack_hex}")
         
-        if ack_hex == expected_digest:
-            print(f"[teleport-stream] *** 1:1 CRYPTOGRAPHIC PARITY CONFIRMED OVER LIVE SERIAL! ***")
+        if frame.magic != 0x534F5652:
+            if ack_hex == "00" * 32:
+                print(f"    [+] PASSED: Microkernel rejected invalid magic with zeroed vector.")
+            else:
+                print(f"    [-] FAILED: Microkernel did not reject invalid magic.")
+        elif ack_hex == expected_digest:
+            print(f"    [+] PASSED: 1:1 Live Cryptographic Parity Confirmed.")
         else:
-            print(f"[teleport-stream] Warning: Digest mismatch! Expected: {expected_digest}")
+            print(f"    [-] FAILED: Digest mismatch!")
             
     except ConnectionRefusedError:
-        print(f"[teleport-stream] Connection failed. Is QEMU running with COM2 on {host}:{port}?")
+        print(f"[-] Connection failed. Is QEMU running with COM2 on {host}:{port}?")
     finally:
         client.close()
 
+def run_mutation_suite(host=DEFAULT_HOST, port=COM2_PORT):
+    print("=== BEGIN SOVEREIGN AUDIT FRAME MUTATION SUITE ===")
+    
+    # Test 1: Authentic standard frame
+    frame1 = serialize_estate_to_frame()
+    stream_frame_to_com2(frame1, host, port, label="Test 1: Authentic Baseline Frame")
+    
+    # Test 2: Mutate claimant string
+    frame2 = serialize_estate_to_frame()
+    frame2.claimant = b"John B. J. Carroll (Authorized PR)"
+    stream_frame_to_com2(frame2, host, port, label="Test 2: Mutated Claimant Field")
+    
+    # Test 3: Add an additional lineage node
+    frame3 = serialize_estate_to_frame()
+    frame3.node_count = 4
+    frame3.nodes[3].name = b"K'eegwiinjiik Ancestor"
+    frame3.nodes[3].era_year = 1680
+    frame3.nodes[3].territorial_hub = b"Black River Watershed"
+    frame3.nodes[3].title_type = 1
+    stream_frame_to_com2(frame3, host, port, label="Test 3: Appended 4th Lineage Node")
+    
+    # Test 4: Fault injection - corrupt magic
+    frame4 = serialize_estate_to_frame()
+    frame4.magic = 0xDEADBEEF
+    stream_frame_to_com2(frame4, host, port, label="Test 4: Fault Injection (Corrupt Magic 0xDEADBEEF)")
+    
+    print("=== MUTATION SUITE COMPLETE ===")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Teleport socket JSON/Binary/COM2 transport")
-    parser.add_argument("mode", choices=["server", "client", "stream-com2"], help="Operation mode")
+    parser.add_argument("mode", choices=["server", "client", "stream-com2", "test-mutations"], help="Operation mode")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--bin", action="store_true", help="Request raw binary audit contract frame")
@@ -141,4 +171,8 @@ if __name__ == "__main__":
         query_client(args.host, port, binary_mode=args.bin)
     elif args.mode == "stream-com2":
         port = args.port or COM2_PORT
-        stream_to_sel4_com2(args.host, port)
+        frame = serialize_estate_to_frame()
+        stream_frame_to_com2(frame, args.host, port)
+    elif args.mode == "test-mutations":
+        port = args.port or COM2_PORT
+        run_mutation_suite(args.host, port)
