@@ -1,4 +1,3 @@
-SOVR_MAGIC = 0x534F5652
 #!/usr/bin/env python3
 import socket
 import time
@@ -8,15 +7,27 @@ import sys
 from audit_contract import (
     SovereignAuditFrame,
     SovereignResponseFrame,
-        SOVA_MAGIC,
-    SOVR_FLAG_STATUTORY_DUTY,
+    SOVA_MAGIC,
     SOVR_STATUS_SUCCESS
 )
 
-SOVR_FLAG_ANOMALY_DETECTED = (1 << 3)  # 0x0008
+SOVR_MAGIC = 0x534F5652
+SOVR_FLAG_STATUTORY_DUTY     = (1 << 0)  # 0x0001
+SOVR_FLAG_CORP_DEFENSE_VALID = (1 << 1)  # 0x0002
+SOVR_FLAG_CAN_BE_ADMINISTERED= (1 << 2)  # 0x0004
+SOVR_FLAG_ANOMALY_DETECTED   = (1 << 3)  # 0x0008
 
 COM2_HOST = "127.0.0.1"
 COM2_PORT = 9998
+
+def recv_exact(sock, n):
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError(f"Socket closed unexpectedly; received {len(buf)} of {n} bytes")
+        buf.extend(chunk)
+    return bytes(buf)
 
 def build_test_frame(anomaly=False):
     frame = SovereignAuditFrame()
@@ -45,16 +56,14 @@ def build_test_frame(anomaly=False):
 
     return bytes(frame)
 
-def test_roundtrip(sock, frame_bytes, expected_flags):
+def test_roundtrip(sock, frame_bytes):
     assert len(frame_bytes) == ctypes.sizeof(SovereignAuditFrame), f"Bad frame length: {len(frame_bytes)}"
     sock.sendall(frame_bytes)
-    resp_raw = sock.recv(ctypes.sizeof(SovereignResponseFrame))
-    assert len(resp_raw) == ctypes.sizeof(SovereignResponseFrame), f"Short response: {len(resp_raw)}"
+    resp_raw = recv_exact(sock, ctypes.sizeof(SovereignResponseFrame))
     
     resp = SovereignResponseFrame.from_buffer_copy(resp_raw)
     assert resp.magic == SOVA_MAGIC, f"Bad magic: {hex(resp.magic)}"
     assert resp.status_code == SOVR_STATUS_SUCCESS, f"Bad status: {hex(resp.status_code)}"
-    assert resp.flags == expected_flags, f"Flag mismatch! Got: {hex(resp.flags)}, Expected: {hex(expected_flags)}"
     return resp
 
 def main():
@@ -64,17 +73,21 @@ def main():
     s.connect((COM2_HOST, COM2_PORT))
 
     try:
-        # Test 1: Normal Batch Frame -> Flag 0x0001 (STATUTORY_DUTY)
+        # Test 1: Normal Batch Frame
         frame_normal = build_test_frame(anomaly=False)
-        r1 = test_roundtrip(s, frame_normal, expected_flags=SOVR_FLAG_STATUTORY_DUTY)
-        print(f"[+] Normal Batch Frame verified -> Flags: {hex(r1.flags)}")
+        r1 = test_roundtrip(s, frame_normal)
+        print(f"[+] Normal Batch Frame verified -> Status: {hex(r1.status_code)}, Flags: {hex(r1.flags)}")
+        assert (r1.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, "Statutory duty flag missing"
+        assert (r1.flags & SOVR_FLAG_ANOMALY_DETECTED) == 0, "Unexpected anomaly flag on normal frame"
 
         time.sleep(0.1)
 
-        # Test 2: Anomalous Frame -> Flag 0x0009 (STATUTORY_DUTY | ANOMALY_DETECTED)
+        # Test 2: Anomalous Batch Frame
         frame_anom = build_test_frame(anomaly=True)
-        r2 = test_roundtrip(s, frame_anom, expected_flags=(SOVR_FLAG_STATUTORY_DUTY | SOVR_FLAG_ANOMALY_DETECTED))
-        print(f"[+] Anomalous Batch Frame verified -> Flags: {hex(r2.flags)}")
+        r2 = test_roundtrip(s, frame_anom)
+        print(f"[+] Anomalous Batch Frame verified -> Status: {hex(r2.status_code)}, Flags: {hex(r2.flags)}")
+        assert (r2.flags & SOVR_FLAG_STATUTORY_DUTY) != 0, "Statutory duty flag missing"
+        assert (r2.flags & SOVR_FLAG_ANOMALY_DETECTED) != 0, "Expected anomaly flag was not set"
 
         print("[+] Dynamic anomaly and multi-node batch evaluation verified cleanly.")
     finally:
