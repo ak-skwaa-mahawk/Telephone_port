@@ -86,7 +86,7 @@ def run_fuzz_campaign():
     truncation_lengths = [1, 16, 64, 319, 320, 512, 1024, 1151]
     
     for length in truncation_lengths:
-        seq_id += 1
+        seq_id = get_next_seq(1)
         frame = build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07)
         raw_truncated = bytes(frame)[:length]
         
@@ -110,7 +110,7 @@ def run_fuzz_campaign():
     random.seed(0x5056524E)
 
     for i in range(100):
-        seq_id += 1
+        seq_id = get_next_seq(1)
         valid_frame = bytes(build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07))
         mutable = bytearray(valid_frame)
 
@@ -172,7 +172,7 @@ def run_fuzz_campaign():
     if drained > 0:
         print(f"    Drained {drained} trailing bytes before liveness check.")
 
-    seq_id += 500
+    seq_id = get_next_seq(500)
     final_frame = build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07)
     sock.sendall(bytes(final_frame))
     final_resp = recv_response(sock, timeout=1.5)
