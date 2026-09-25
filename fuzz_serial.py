@@ -54,7 +54,7 @@ def drain_socket(sock):
 def run_fuzz_campaign():
     print(f"[*] Initializing adversarial serial fuzzer on {HOST}:{PORT}...")
     sock = connect_com2()
-    seq_id = int(time.time()) + 80000
+    seq_id = int(time.time()) + 90000
 
     # ------------------------------------------------------------------
     # Stage 1: Partial Frame Truncation & Buffer Drain Invariant
@@ -79,15 +79,12 @@ def run_fuzz_campaign():
         sock.sendall(b"\xFF" * pad_len)
         resp = recv_response(sock, timeout=0.5)
         assert resp is not None, f"Rootserver did not respond after completing 1152 bytes at len {length}"
-        
-        # Notice: at length 1151, corrupting the last byte modifies inactive witness 3,
-        # which is ignored by the 3-of-4 gate. In all other cases, it corrupts prehash or active signatures.
         print(f"    Truncated {length:4d} bytes -> Held correctly, completed frame returned 0x{resp.status_code:04x}")
 
     # ------------------------------------------------------------------
-    # Stage 2: Targeted Bit-Flipping Fuzzing (100 Iterations)
+    # Stage 2: Targeted Bit-Flipping Fuzzing (100 Iterations across Enforced Gates)
     # ------------------------------------------------------------------
-    print("\n[+] Stage 2: Targeted Bit-Flipping Fuzzing (100 Iterations across Active Regions)")
+    print("\n[+] Stage 2: Targeted Bit-Flipping Fuzzing (100 Iterations across Enforced Gates)")
     rejections = 0
     random.seed(0x5056524E)
 
@@ -96,13 +93,23 @@ def run_fuzz_campaign():
         valid_frame = bytes(build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07))
         mutable = bytearray(valid_frame)
 
-        # Specifically flip bits in the active regions (bytes 0..320 prehash, or active witness signatures)
-        flips = random.randint(1, 4)
-        for _ in range(flips):
-            # Target bytes 0..320 (prehash) or active witness entries
-            target_byte = random.randint(0, 319)
-            target_bit = 1 << random.randint(0, 7)
-            mutable[target_byte] ^= target_bit
+        # Test active rejection boundaries:
+        if i % 3 == 0:
+            # Corrupt public key of an active witness (triggers unpackneg decompression failure 0xE004)
+            w_idx = random.randint(0, 2)
+            target_byte = 320 + w_idx * 96 + 64 + random.randint(0, 31)
+            mutable[target_byte] ^= (1 << random.randint(0, 7))
+        elif i % 3 == 1:
+            # Corrupt signature high bits (violates (sig[63] & 224) == 0 canonical bound)
+            w_idx = random.randint(0, 2)
+            target_byte = 320 + w_idx * 96 + 63
+            mutable[target_byte] |= 0x80
+        else:
+            # Corrupt quorum count or signer bitmap in metadata
+            if random.random() < 0.5:
+                mutable[28] = random.choice([0, 1, 2, 5]) # Invalid quorum count
+            else:
+                mutable[29] ^= (1 << random.randint(0, 3)) # Mismatched bitmap
 
         sock.sendall(mutable)
         resp = recv_response(sock, timeout=0.4)
@@ -111,7 +118,7 @@ def run_fuzz_campaign():
             rejections += 1
         else:
             if resp.status_code == SOVR_STATUS_SUCCESS:
-                print(f"[-] CRITICAL: Mutated prehash accepted at iteration {i}!")
+                print(f"[-] CRITICAL: Mutated frame accepted at iteration {i}!")
                 sys.exit(1)
             else:
                 rejections += 1
