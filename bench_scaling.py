@@ -41,8 +41,10 @@ def build_frame(node_count: int, seq_id: int) -> bytes:
     frame.sequence_id = seq_id
     frame.veteran_verified = 1
     frame.node_count = node_count
+    frame.quorum_count = 3
+    frame.signer_bitmap = 0x07
     frame.claimant = f"Saturated Q16 Scaling Sweep Node-{node_count}".encode("utf-8")
-    frame.dockets[0].value = b"4FA-23-01878PR-IN-THE-SUPERIOR-COURT-OF-ALASKA"
+    frame.dockets[0].value = b"4FA-23-01878PR-AK-SUPERIOR"
 
     for n in range(node_count):
         frame.nodes[n].name = f"Node-{n}".encode("utf-8")
