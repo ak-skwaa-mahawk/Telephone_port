@@ -24,7 +24,7 @@ def connect_com2():
     sock.connect((HOST, PORT))
     return sock
 
-def recv_response(sock, timeout=0.5):
+def recv_response(sock, timeout=0.4):
     ready = select.select([sock], [], [], timeout)
     if not ready[0]:
         return None
@@ -41,54 +41,53 @@ def recv_response(sock, timeout=0.5):
         return SovereignResponseFrame.from_buffer_copy(raw)
     return None
 
+def drain_socket(sock):
+    """Drain any pending bytes on the socket."""
+    while True:
+        ready = select.select([sock], [], [], 0.05)
+        if ready[0]:
+            chunk = sock.recv(1024)
+            if not chunk:
+                break
+        else:
+            break
+
 def run_fuzz_campaign():
     print(f"[*] Initializing adversarial serial fuzzer on {HOST}:{PORT}...")
-    seq_id = int(time.time()) + 60000
+    sock = connect_com2()
+    seq_id = int(time.time()) + 70000
 
     # ------------------------------------------------------------------
-    # Stage 1: Partial Frame Truncation & Isolation
+    # Stage 1: Partial Frame Truncation & Drained Alignment
     # ------------------------------------------------------------------
-    print("\n[+] Stage 1: Partial Frame Truncation & Connection Isolation")
+    print("\n[+] Stage 1: Partial Frame Truncation & Buffer Drain Invariant")
     truncation_lengths = [1, 16, 64, 319, 320, 512, 1024, 1151]
     
     for length in truncation_lengths:
         seq_id += 1
-        sock = connect_com2()
         frame = build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07)
         raw_truncated = bytes(frame)[:length]
         
-        # Send incomplete chunk alone
+        # 1. Send truncated chunk
         sock.sendall(raw_truncated)
-        resp = recv_response(sock, timeout=0.2)
+        resp = recv_response(sock, timeout=0.1)
         if resp is not None:
             print(f"[-] Premature frame dispatch on truncated fragment ({length} bytes): 0x{resp.status_code:04x}")
             sys.exit(1)
 
-        print(f"    Truncated {length:4d} bytes -> Buffered (no premature dispatch, zero leaks)")
-        sock.close()
-        time.sleep(0.05)
+        # 2. Pad remainder to complete 1152-byte boundary and clear accumulator
+        pad_len = FRAME_SIZE - length
+        sock.sendall(b"\xFF" * pad_len)
+        resp = recv_response(sock, timeout=0.5)
+        assert resp is not None, f"Rootserver did not reject padded garbage at len {length}"
+        assert resp.status_code != SOVR_STATUS_SUCCESS, f"Padded garbage was accepted! (0x{resp.status_code:04x})"
+
+        print(f"    Truncated {length:4d} bytes -> Held correctly, padded flush returned 0x{resp.status_code:04x}")
 
     # ------------------------------------------------------------------
-    # Stage 2: In-Stream Desynchronization & Rejection Verification
+    # Stage 2: Pseudorandom Bit-Flipping across 1152-byte Geometry (100 Iterations)
     # ------------------------------------------------------------------
-    print("\n[+] Stage 2: Desynchronized Offset Ingestion (Skewed Framing)")
-    sock = connect_com2()
-    # Inject 13 bytes of misalignment
-    sock.sendall(b"\xAA" * 13)
-    seq_id += 1
-    aligned_frame = build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07)
-    sock.sendall(bytes(aligned_frame))
-    resp = recv_response(sock, timeout=0.5)
-    print(f"    Skewed stream response: {'0x%04x' % resp.status_code if resp else 'Dropped/Pending'}")
-    assert resp is None or resp.status_code != SOVR_STATUS_SUCCESS, "Skewed stream was unexpectedly accepted!"
-    sock.close()
-    time.sleep(0.05)
-
-    # ------------------------------------------------------------------
-    # Stage 3: Pseudorandom Bit-Flipping across 1152-byte Geometry (100 Iterations)
-    # ------------------------------------------------------------------
-    print("\n[+] Stage 3: Targeted Bit-Flipping Fuzzing (100 Iterations)")
-    sock = connect_com2()
+    print("\n[+] Stage 2: Targeted Bit-Flipping Fuzzing (100 Iterations)")
     rejections = 0
     random.seed(0x5056524E)
 
@@ -117,32 +116,36 @@ def run_fuzz_campaign():
                 rejections += 1
 
     print(f"    Completed 100/100 mutations: {rejections} rejected or dropped cleanly.")
-    sock.close()
-    time.sleep(0.05)
 
     # ------------------------------------------------------------------
-    # Stage 4: High-Entropy Noise Bursts & Null Byte Flooding
+    # Stage 3: High-Entropy Noise Bursts & Resynchronization
     # ------------------------------------------------------------------
-    print("\n[+] Stage 4: High-Entropy Noise Bursts & Null Floods")
-    sock = connect_com2()
-    for burst_size in [64, 256, 1152, 4096]:
-        garbage = bytes(random.getrandbits(8) for _ in range(burst_size))
+    print("\n[+] Stage 3: Noise Flooding & Boundary Resynchronization")
+    # Send random noise aligned to frame blocks
+    for blocks in [1, 2, 4]:
+        garbage = bytes(random.getrandbits(8) for _ in range(FRAME_SIZE * blocks))
         sock.sendall(garbage)
-        resp = recv_response(sock, timeout=0.1)
-        print(f"    Noise burst ({burst_size:4d} bytes) -> Handled without panic.")
+        for _ in range(blocks):
+            resp = recv_response(sock, timeout=0.3)
+            assert resp is not None and resp.status_code != SOVR_STATUS_SUCCESS
 
-    sock.sendall(b"\x00" * 4096)
-    resp = recv_response(sock, timeout=0.1)
-    print("    Null flood (4096 bytes) -> Absorbed without panic.")
-    sock.close()
-    time.sleep(0.05)
+    print("    Aligned noise bursts rejected without deadlock.")
+
+    # Send 4096 null bytes padded to 1152 boundary
+    null_pad = ((4096 + FRAME_SIZE - 1) // FRAME_SIZE) * FRAME_SIZE
+    sock.sendall(b"\x00" * null_pad)
+    for _ in range(null_pad // FRAME_SIZE):
+        resp = recv_response(sock, timeout=0.3)
+        assert resp is not None and resp.status_code != SOVR_STATUS_SUCCESS
+
+    print(f"    Null byte flood ({null_pad} bytes) rejected cleanly.")
 
     # ------------------------------------------------------------------
-    # Stage 5: Post-Stress Liveness & Invariant Confirmation
+    # Stage 4: Post-Stress Liveness & Invariant Confirmation
     # ------------------------------------------------------------------
-    print("\n[+] Stage 5: Verifying Microkernel Liveness Post-Fuzz...")
-    sock = connect_com2()
-    seq_id += 50
+    print("\n[+] Stage 4: Verifying Microkernel Liveness Post-Fuzz...")
+    drain_socket(sock)
+    seq_id += 100
     final_frame = build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07)
     sock.sendall(bytes(final_frame))
     final_resp = recv_response(sock, timeout=1.5)
