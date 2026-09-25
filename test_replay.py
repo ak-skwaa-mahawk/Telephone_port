@@ -5,10 +5,11 @@ import ctypes
 import time
 from audit_contract import (
     SovereignAuditFrame, SovereignResponseFrame,
-    SOVR_MAGIC, SOVA_MAGIC, SOVR_VERSION, ROLE_FIDUCIARY_PR,
+    SOVR_MAGIC, SOVR_VERSION, ROLE_FIDUCIARY_PR,
     SOVR_STATUS_SUCCESS, SOVR_STATUS_REJECT_REPLAY,
     SOVR_FLAG_QUORUM_VERIFIED
 )
+from sovereign_pseudonyms import SOVR_ROOT_PUBKEYS
 
 HOST = "127.0.0.1"
 PORT = 9998
@@ -40,8 +41,15 @@ def build_test_frame(sequence_id):
     frame.nodes[0].era_year = 1795
     frame.nodes[0].territorial_hub = b"Yukon / Porcupine"[:23]
     frame.nodes[0].title_type = 1
+
+    # Triad quorum (0x07 = signers 0, 1, 2)
     frame.quorum_count = 3
     frame.signer_bitmap = 0x07
+    for w_i in range(3):
+        k = SOVR_ROOT_PUBKEYS[w_i]
+        for b_i in range(32):
+            frame.witnesses[w_i].signer_pubkey[b_i] = k[b_i]
+
     return frame
 
 def run_adversarial_suite():
@@ -49,7 +57,6 @@ def run_adversarial_suite():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((HOST, PORT))
 
-    # Base sequence on monotonic time to guarantee strictly forward progression
     test_seq = int(time.time())
 
     # Phase 1: Forward legitimate frame
