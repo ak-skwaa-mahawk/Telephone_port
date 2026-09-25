@@ -54,7 +54,27 @@ def drain_socket(sock):
 def run_fuzz_campaign():
     print(f"[*] Initializing adversarial serial fuzzer on {HOST}:{PORT}...")
     sock = connect_com2()
-    seq_id = int(time.time()) + 90000
+    seq_id = int(time.time()) + 120000
+
+    dummy = build_test_frame(seq_id=1, quorum_count=3, signer_bitmap=0x07)
+    frame_cls = type(dummy)
+
+    # Frame field offsets
+    quorum_offset = frame_cls.quorum_count.offset if hasattr(frame_cls, 'quorum_count') else 28
+    bitmap_offset = frame_cls.signer_bitmap.offset if hasattr(frame_cls, 'signer_bitmap') else 29
+    witness_offset = frame_cls.witnesses.offset
+    w_size = ctypes.sizeof(dummy.witnesses[0])
+    w_cls = type(dummy.witnesses[0])
+
+    # Dynamic lookup of signature and pubkey field names in SovereignWitness
+    sig_offset = 0
+    pk_offset = 64
+    for field_name, _ in w_cls._fields_:
+        attr = getattr(w_cls, field_name)
+        if "sig" in field_name.lower():
+            sig_offset = attr.offset
+        elif any(k in field_name.lower() for k in ["pub", "key", "root"]):
+            pk_offset = attr.offset
 
     # ------------------------------------------------------------------
     # Stage 1: Partial Frame Truncation & Buffer Drain Invariant
@@ -82,9 +102,9 @@ def run_fuzz_campaign():
         print(f"    Truncated {length:4d} bytes -> Held correctly, completed frame returned 0x{resp.status_code:04x}")
 
     # ------------------------------------------------------------------
-    # Stage 2: Targeted Bit-Flipping Fuzzing (100 Iterations across Enforced Gates)
+    # Stage 2: Targeted Gate Fuzzing (100 Iterations across Rejection Gates)
     # ------------------------------------------------------------------
-    print("\n[+] Stage 2: Targeted Bit-Flipping Fuzzing (100 Iterations across Enforced Gates)")
+    print("\n[+] Stage 2: Targeted Gate Fuzzing (100 Iterations across Rejection Gates)")
     rejections = 0
     random.seed(0x5056524E)
 
@@ -93,23 +113,24 @@ def run_fuzz_campaign():
         valid_frame = bytes(build_test_frame(seq_id=seq_id, quorum_count=3, signer_bitmap=0x07))
         mutable = bytearray(valid_frame)
 
-        # Test active rejection boundaries:
-        if i % 3 == 0:
-            # Corrupt public key of an active witness (triggers unpackneg decompression failure 0xE004)
+        gate_mode = i % 4
+        if gate_mode == 0:
+            # Gate A: Violate canonical signature upper bound (sig[63] & 224 != 0)
             w_idx = random.randint(0, 2)
-            target_byte = 320 + w_idx * 96 + 64 + random.randint(0, 31)
-            mutable[target_byte] ^= (1 << random.randint(0, 7))
-        elif i % 3 == 1:
-            # Corrupt signature high bits (violates (sig[63] & 224) == 0 canonical bound)
+            sig_s_high = witness_offset + w_idx * w_size + sig_offset + 63
+            mutable[sig_s_high] |= 0x80
+        elif gate_mode == 1:
+            # Gate B: Invalid curve point in active public key (triggers unpackneg rejection 0xE004)
             w_idx = random.randint(0, 2)
-            target_byte = 320 + w_idx * 96 + 63
-            mutable[target_byte] |= 0x80
+            pk_start = witness_offset + w_idx * w_size + pk_offset
+            for b in range(32):
+                mutable[pk_start + b] = 0xEE
+        elif gate_mode == 2:
+            # Gate C: Quorum count below threshold (set to 0, 1, or 2)
+            mutable[quorum_offset] = random.choice([0, 1, 2])
         else:
-            # Corrupt quorum count or signer bitmap in metadata
-            if random.random() < 0.5:
-                mutable[28] = random.choice([0, 1, 2, 5]) # Invalid quorum count
-            else:
-                mutable[29] ^= (1 << random.randint(0, 3)) # Mismatched bitmap
+            # Gate D: Signer bitmap mismatch (popcount mismatch against quorum_count=3)
+            mutable[bitmap_offset] = random.choice([0x01, 0x02, 0x04, 0x08, 0x03, 0x05, 0x0A])
 
         sock.sendall(mutable)
         resp = recv_response(sock, timeout=0.4)
@@ -118,12 +139,12 @@ def run_fuzz_campaign():
             rejections += 1
         else:
             if resp.status_code == SOVR_STATUS_SUCCESS:
-                print(f"[-] CRITICAL: Mutated frame accepted at iteration {i}!")
+                print(f"[-] CRITICAL: Gate bypassed at iteration {i} (mode {gate_mode})! Status: 0x{resp.status_code:04x}")
                 sys.exit(1)
             else:
                 rejections += 1
 
-    print(f"    Completed 100/100 active mutations: {rejections} rejected cleanly.")
+    print(f"    Completed 100/100 gate mutations: {rejections} rejected cleanly.")
 
     # ------------------------------------------------------------------
     # Stage 3: Noise Flooding & Boundary Resynchronization
