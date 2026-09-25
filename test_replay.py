@@ -25,7 +25,7 @@ def run_adversarial_suite():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((HOST, PORT))
 
-    base_seq = int(time.time()) + 1000
+    base_seq = get_next_seq(100)
 
     # Phase 1: Legitimate forward sequence frame
     print(f"[*] Phase 1: Dispatching legitimate forward frame (sequence_id = {base_seq})...")
