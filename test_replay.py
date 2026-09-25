@@ -1,3 +1,4 @@
+from sovr_seq import get_next_seq
 #!/usr/bin/env python3
 import socket
 import sys

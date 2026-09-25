@@ -1,3 +1,4 @@
+from sovr_seq import get_next_seq
 #!/usr/bin/env python3
 import socket
 import select
@@ -58,7 +59,7 @@ def drain_socket(sock, drain_timeout=0.2):
 def run_fuzz_campaign():
     print(f"[*] Initializing adversarial serial fuzzer on {HOST}:{PORT}...")
     sock = connect_com2()
-    seq_id = int(time.time()) + 130000
+    seq_id = get_next_seq(200)
 
     dummy = build_test_frame(seq_id=1, quorum_count=3, signer_bitmap=0x07)
     frame_cls = type(dummy)

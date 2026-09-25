@@ -5,11 +5,7 @@ import ctypes
 import time
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-def get_dynamic_seq():
-    if not hasattr(get_dynamic_seq, "val"):
-        get_dynamic_seq.val = int(time.time()) + 200000
-    get_dynamic_seq.val += 1
-    return get_dynamic_seq.val
+from sovr_seq import get_next_seq
 
 from audit_contract import (
     SovereignAuditFrame, SovereignResponseFrame,
@@ -94,35 +90,35 @@ def main():
 
     # Phase 1: Sub-threshold quorum (quorum_count=2, bitmap=0x03) -> Expect 0xE004
     print("[*] Phase 1: Sub-threshold quorum (quorum_count=2, bitmap=0x03)...")
-    f1 = build_test_frame(seq_id=get_dynamic_seq(), quorum_count=2, signer_bitmap=0x03)
+    f1 = build_test_frame(seq_id=get_next_seq(10), quorum_count=2, signer_bitmap=0x03)
     r1 = send_frame(sock, f1)
     print(f"[+] Phase 1 response: Status 0x{r1.status_code:04x}, Flags 0x{r1.flags:04x}")
     assert r1.status_code == SOVR_STATUS_ERR_QUORUM, f"Expected 0xE004, got 0x{r1.status_code:04x}"
 
     # Phase 2: Popcount mismatch (quorum_count=3, bitmap=0x01) -> Expect 0xE004
     print("[*] Phase 2: Popcount mismatch (quorum_count=3, bitmap=0x01)...")
-    f2 = build_test_frame(seq_id=get_dynamic_seq(), quorum_count=3, signer_bitmap=0x01)
+    f2 = build_test_frame(seq_id=get_next_seq(10), quorum_count=3, signer_bitmap=0x01)
     r2 = send_frame(sock, f2)
     print(f"[+] Phase 2 response: Status 0x{r2.status_code:04x}, Flags 0x{r2.flags:04x}")
     assert r2.status_code == SOVR_STATUS_ERR_QUORUM, f"Expected 0xE004, got 0x{r2.status_code:04x}"
 
     # Phase 3: Corrupted public keys -> Expect 0xE004
     print("[*] Phase 3: Corrupted public keys (quorum_count=3, bitmap=0x07, key=\\x00)...")
-    f3 = build_test_frame(seq_id=get_dynamic_seq(), quorum_count=3, signer_bitmap=0x07, corrupt_keys=True)
+    f3 = build_test_frame(seq_id=get_next_seq(10), quorum_count=3, signer_bitmap=0x07, corrupt_keys=True)
     r3 = send_frame(sock, f3)
     print(f"[+] Phase 3 response: Status 0x{r3.status_code:04x}, Flags 0x{r3.flags:04x}")
     assert r3.status_code == SOVR_STATUS_ERR_QUORUM, f"Expected 0xE004, got 0x{r3.status_code:04x}"
 
     # Phase 4: Corrupted signature -> Expect 0xE004
     print("[*] Phase 4: Corrupted Ed25519 signature (quorum_count=3, bitmap=0x07, sig=\\xFF)...")
-    f4 = build_test_frame(seq_id=get_dynamic_seq(), quorum_count=3, signer_bitmap=0x07, corrupt_sig=True)
+    f4 = build_test_frame(seq_id=get_next_seq(10), quorum_count=3, signer_bitmap=0x07, corrupt_sig=True)
     r4 = send_frame(sock, f4)
     print(f"[+] Phase 4 response: Status 0x{r4.status_code:04x}, Flags 0x{r4.flags:04x}")
     assert r4.status_code == SOVR_STATUS_ERR_QUORUM, f"Expected 0xE004, got 0x{r4.status_code:04x}"
 
     # Phase 5: Valid threshold quorum (3 of 4: Node U Esq + Lineage Root + Fed Trust) -> Expect 0x0000, 0x0011
     print("[*] Phase 5: Authorized 3-of-4 triad with valid Ed25519 signatures...")
-    f5 = build_test_frame(seq_id=get_dynamic_seq(), quorum_count=3, signer_bitmap=0x07)
+    f5 = build_test_frame(seq_id=get_next_seq(10), quorum_count=3, signer_bitmap=0x07)
     r5 = send_frame(sock, f5)
     print(f"[+] Phase 5 response: Status 0x{r5.status_code:04x}, Flags 0x{r5.flags:04x}")
     assert r5.status_code == SOVR_STATUS_SUCCESS, f"Expected 0x0000, got 0x{r5.status_code:04x}"
@@ -130,7 +126,7 @@ def main():
 
     # Phase 6: Valid supermajority quorum (4 of 4) -> Expect 0x0000, 0x0011
     print("[*] Phase 6: Authorized 4-of-4 committee with valid Ed25519 signatures...")
-    f6 = build_test_frame(seq_id=get_dynamic_seq(), quorum_count=4, signer_bitmap=0x0F)
+    f6 = build_test_frame(seq_id=get_next_seq(10), quorum_count=4, signer_bitmap=0x0F)
     r6 = send_frame(sock, f6)
     print(f"[+] Phase 6 response: Status 0x{r6.status_code:04x}, Flags 0x{r6.flags:04x}")
     assert r6.status_code == SOVR_STATUS_SUCCESS, f"Expected 0x0000, got 0x{r6.status_code:04x}"
