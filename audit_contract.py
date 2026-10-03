@@ -76,3 +76,80 @@ assert ctypes.sizeof(SovereignWitness) == 96, f"Witness size mismatch: {ctypes.s
 assert ctypes.sizeof(CLineageNode) == 64, f"Node size mismatch: {ctypes.sizeof(CLineageNode)}"
 assert ctypes.sizeof(SovereignAuditFrame) == 1152, f"Frame size mismatch: {ctypes.sizeof(SovereignAuditFrame)}"
 assert ctypes.sizeof(SovereignResponseFrame) == 40, f"Response size mismatch: {ctypes.sizeof(SovereignResponseFrame)}"
+
+import hashlib
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from sovr_seq import get_next_seq
+
+COMMITTEE_SEEDS = [
+    b"\x11" * 32,  # Node U Esq
+    b"\x22" * 32,  # Lineage Root
+    b"\x33" * 32,  # Fed Trust
+    b"\x44" * 32   # Corp Sentry
+]
+COMMITTEE_PRIVKEYS = [ed25519.Ed25519PrivateKey.from_private_bytes(seed) for seed in COMMITTEE_SEEDS]
+
+def compute_frame_binary_hash(frame: SovereignAuditFrame) -> str:
+    """Computes SHA-256 over exact memory buffers matching seL4 sovereign contract."""
+    h = hashlib.sha256()
+    base_addr = ctypes.addressof(frame)
+
+    # 1. Raw 64-byte claimant buffer
+    claimant_ptr = base_addr + SovereignAuditFrame.claimant.offset
+    h.update(ctypes.string_at(claimant_ptr, 64))
+
+    # 2. Raw 128-byte dockets buffer (4 * 32 bytes)
+    dockets_ptr = base_addr + SovereignAuditFrame.dockets.offset
+    h.update(ctypes.string_at(dockets_ptr, 4 * 32))
+
+    # 3. Active nodes buffer (sizeof(CLineageNode) * node_count = 64 * node_count)
+    nodes_ptr = base_addr + SovereignAuditFrame.nodes.offset
+    node_bytes_len = ctypes.sizeof(CLineageNode) * frame.node_count
+    h.update(ctypes.string_at(nodes_ptr, node_bytes_len))
+
+    return h.hexdigest()
+
+def serialize_estate_to_frame(seq_id=None, quorum_count=3, signer_bitmap=0x07) -> SovereignAuditFrame:
+    """Serializes the sovereign estate state into a valid 1152-byte Quorum signed frame."""
+    if seq_id is None:
+        seq_id = get_next_seq(1)
+
+    frame = SovereignAuditFrame()
+    frame.magic = SOVR_MAGIC
+    frame.version = SOVR_VERSION
+    frame.fiduciary_role = ROLE_FIDUCIARY_PR
+    frame.sequence_id = seq_id
+    frame.veteran_verified = 1
+    frame.statutory_duty = 1
+    frame.corporate_defense_valid = 0
+    frame.can_be_administered_away = 0
+    frame.node_count = 1
+    frame.claimant = b"Christopher Carroll"
+    frame.dockets[0].value = b"4FA-23-01878PR-AK-SUPERIOR"[:31]
+
+    frame.nodes[0].name = b"Dahzhit (Dehjalti')"[:31]
+    frame.nodes[0].era_year = 1795
+    frame.nodes[0].territorial_hub = b"Yukon / Porcupine"[:23]
+    frame.nodes[0].title_type = 1
+
+    frame.quorum_count = quorum_count
+    frame.signer_bitmap = signer_bitmap
+
+    # Message slice signed by quorum is exactly the first 320 bytes
+    message_block = bytes(frame)[:320]
+
+    witness_idx = 0
+    for bit in range(4):
+        if signer_bitmap & (1 << bit):
+            if witness_idx < quorum_count:
+                priv = COMMITTEE_PRIVKEYS[bit]
+                pub_bytes = priv.public_key().public_bytes_raw()
+                sig_bytes = priv.sign(message_block)
+
+                for i in range(32):
+                    frame.witnesses[witness_idx].signer_pubkey[i] = pub_bytes[i]
+                for i in range(64):
+                    frame.witnesses[witness_idx].signature[i] = sig_bytes[i]
+                witness_idx += 1
+
+    return frame
